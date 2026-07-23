@@ -1,0 +1,6 @@
+{
+  "appHost": {
+    "path": "AiDocMngmnt.AppHost/AiDocMngmnt.AppHost.csproj"
+  },
+  "channel": "stable"
+}
