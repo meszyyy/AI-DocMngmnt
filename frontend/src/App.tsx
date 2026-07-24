@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import './App.css';
 
 interface DocumentDto {
@@ -14,9 +14,10 @@ interface DocumentDto {
 
 function App() {
   const [documents, setDocuments] = useState<DocumentDto[]>([]);
-  const [newFileName, setNewFileName] = useState('');
   const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchDocuments = useCallback(async () => {
     setLoading(true);
@@ -38,22 +39,36 @@ function App() {
     fetchDocuments();
   }, [fetchDocuments]);
 
-  const createDocument = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newFileName.trim()) return;
+  const uploadFile = async (file: File) => {
+    setUploading(true);
+    setError(null);
     try {
+      const formData = new FormData();
+      // The key must match the IFormFile parameter name on the server ("file").
+      formData.append('file', file);
+
       const response = await fetch('/api/documents', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fileName: newFileName.trim() }),
+        body: formData,
       });
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        throw new Error(`Upload failed! status: ${response.status}`);
       }
-      setNewFileName('');
       await fetchDocuments();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create document');
+      setError(err instanceof Error ? err.message : 'Failed to upload file');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const onFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      uploadFile(file);
     }
   };
 
@@ -72,6 +87,13 @@ function App() {
   const formatDate = (dateString: string) =>
     new Date(dateString).toLocaleString();
 
+  const formatBytes = (bytes: number) => {
+    if (bytes === 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    return `${(bytes / 1024 ** i).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+  };
+
   return (
     <div className="app-container">
       <header className="app-header">
@@ -86,28 +108,32 @@ function App() {
               <h2 id="documents-heading" className="section-title">
                 Documents
               </h2>
-              <button
-                className="refresh-button"
-                onClick={fetchDocuments}
-                disabled={loading}
-                type="button"
-              >
-                {loading ? 'Loading...' : 'Refresh'}
-              </button>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button
+                  className="refresh-button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  type="button"
+                >
+                  {uploading ? 'Uploading...' : 'Upload file'}
+                </button>
+                <button
+                  className="refresh-button"
+                  onClick={fetchDocuments}
+                  disabled={loading}
+                  type="button"
+                >
+                  {loading ? 'Loading...' : 'Refresh'}
+                </button>
+              </div>
             </div>
 
-            <form onSubmit={createDocument} style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-              <input
-                type="text"
-                value={newFileName}
-                onChange={(e) => setNewFileName(e.target.value)}
-                placeholder="File name (e.g. contract.pdf)"
-                style={{ flex: 1, padding: '0.5rem' }}
-              />
-              <button className="refresh-button" type="submit" disabled={!newFileName.trim()}>
-                Add
-              </button>
-            </form>
+            <input
+              ref={fileInputRef}
+              type="file"
+              onChange={onFileSelected}
+              style={{ display: 'none' }}
+            />
 
             {error && (
               <div className="error-message" role="alert">
@@ -116,12 +142,13 @@ function App() {
             )}
 
             {documents.length === 0 && !loading ? (
-              <p>No documents yet — add one above!</p>
+              <p>No documents yet — upload one!</p>
             ) : (
               <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                 <thead>
                   <tr>
                     <th style={{ padding: '0.5rem' }}>File name</th>
+                    <th style={{ padding: '0.5rem' }}>Size</th>
                     <th style={{ padding: '0.5rem' }}>Status</th>
                     <th style={{ padding: '0.5rem' }}>Uploaded</th>
                     <th style={{ padding: '0.5rem' }}></th>
@@ -130,7 +157,12 @@ function App() {
                 <tbody>
                   {documents.map((doc) => (
                     <tr key={doc.id} style={{ borderTop: '1px solid rgba(128,128,128,0.3)' }}>
-                      <td style={{ padding: '0.5rem' }}>{doc.fileName}</td>
+                      <td style={{ padding: '0.5rem' }}>
+                        <a href={`/api/documents/${doc.id}/content`} download={doc.fileName}>
+                          {doc.fileName}
+                        </a>
+                      </td>
+                      <td style={{ padding: '0.5rem' }}>{formatBytes(doc.sizeBytes)}</td>
                       <td style={{ padding: '0.5rem' }}>{doc.status}</td>
                       <td style={{ padding: '0.5rem' }}>{formatDate(doc.uploadedAt)}</td>
                       <td style={{ padding: '0.5rem', textAlign: 'right' }}>

@@ -6,5 +6,8 @@ obj/
 .vs/
 *.user
 
+# Local learning notes
+docs/
+
 # Logs
 *.log

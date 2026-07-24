@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using AiDocMngmnt.Server;
 using AiDocMngmnt.Server.Data;
+using Azure.Identity;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -22,6 +23,16 @@ builder.Services.AddOpenApi();
 // resource names — connection strings are injected by the AppHost.
 builder.AddNpgsqlDbContext<AppDbContext>("docdb");
 builder.AddRedisOutputCache("cache");
+builder.AddAzureBlobContainerClient("documents", settings =>
+{
+    if (builder.Environment.IsDevelopment())
+    {
+        // Pin auth to the Azure CLI login (personal account). The default
+        // credential chain could pick up a different signed-in account
+        // (e.g. Visual Studio) on this machine.
+        settings.Credential = new AzureCliCredential();
+    }
+});
 
 var app = builder.Build();
 
