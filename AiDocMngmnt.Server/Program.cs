@@ -1,7 +1,8 @@
 using System.Text.Json.Serialization;
+using AiDocMngmnt.Data;
 using AiDocMngmnt.Server;
-using AiDocMngmnt.Server.Data;
 using Azure.Identity;
+using Azure.Messaging.ServiceBus;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -33,6 +34,11 @@ builder.AddAzureBlobContainerClient("documents", settings =>
         settings.Credential = new AzureCliCredential();
     }
 });
+builder.AddAzureServiceBusClient("messaging");
+
+// Senders are thread-safe and meant to be reused — register one as a singleton.
+builder.Services.AddSingleton(sp =>
+    sp.GetRequiredService<ServiceBusClient>().CreateSender(Queues.DocumentsToProcess));
 
 var app = builder.Build();
 

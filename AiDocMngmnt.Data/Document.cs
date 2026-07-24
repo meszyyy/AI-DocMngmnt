@@ -1,4 +1,4 @@
-namespace AiDocMngmnt.Server.Data;
+﻿namespace AiDocMngmnt.Data;
 
 public class Document
 {
@@ -24,3 +24,4 @@ public enum DocumentStatus
     Processed,
     Failed
 }
+

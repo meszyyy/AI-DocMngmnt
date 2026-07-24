@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace AiDocMngmnt.Server.Data.Migrations
+namespace AiDocMngmnt.Data.Migrations
 {
     /// <inheritdoc />
     public partial class InitialCreate : Migration
@@ -45,3 +45,4 @@ namespace AiDocMngmnt.Server.Data.Migrations
         }
     }
 }
+

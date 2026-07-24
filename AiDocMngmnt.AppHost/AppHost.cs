@@ -24,6 +24,13 @@ var storage = builder.AddAzureStorage("storage");
 // and can inject a ready-to-use BlobContainerClient into the server.
 var documentBlobs = storage.AddBlobContainer("documents");
 
+// Azure Service Bus running as a local emulator container. The queue resource
+// is materialized into the emulator's configuration on startup.
+var serviceBus = builder.AddAzureServiceBus("messaging")
+    .RunAsEmulator();
+
+var documentsQueue = serviceBus.AddServiceBusQueue(name: "documents-to-process");
+
 var server = builder.AddProject<Projects.AiDocMngmnt_Server>("server")
     .WithReference(docdb)
     .WaitFor(docdb)
@@ -31,8 +38,17 @@ var server = builder.AddProject<Projects.AiDocMngmnt_Server>("server")
     .WaitFor(cache)
     .WithReference(documentBlobs)
     .WaitFor(documentBlobs)
+    .WithReference(serviceBus)
+    .WaitFor(documentsQueue)
     .WithHttpHealthCheck("/health")
     .WithExternalHttpEndpoints();
+
+// The worker consumes the queue and updates document status in the database.
+builder.AddProject<Projects.AiDocMngmnt_Worker>("worker")
+    .WithReference(docdb)
+    .WaitFor(docdb)
+    .WithReference(serviceBus)
+    .WaitFor(documentsQueue);
 
 var webfrontend = builder.AddViteApp("webfrontend", "../frontend")
     .WithReference(server)

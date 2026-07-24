@@ -39,6 +39,17 @@ function App() {
     fetchDocuments();
   }, [fetchDocuments]);
 
+  // While any document is still being processed, poll the list so the
+  // status transitions (Uploaded -> Processing -> Processed) show up live.
+  useEffect(() => {
+    const hasActive = documents.some(
+      (d) => d.status === 'Uploaded' || d.status === 'Processing',
+    );
+    if (!hasActive) return;
+    const timer = setInterval(fetchDocuments, 3000);
+    return () => clearInterval(timer);
+  }, [documents, fetchDocuments]);
+
   const uploadFile = async (file: File) => {
     setUploading(true);
     setError(null);

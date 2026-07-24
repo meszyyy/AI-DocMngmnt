@@ -1,12 +1,19 @@
-using AiDocMngmnt.Server.Data;
+using System.Text.Json;
+using AiDocMngmnt.Data;
+using Azure.Messaging.ServiceBus;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
+using Microsoft.AspNetCore.OutputCaching;
 using Microsoft.EntityFrameworkCore;
 
 namespace AiDocMngmnt.Server;
 
 public static class DocumentEndpoints
 {
+    // Cache entries carrying this tag are evicted whenever a write happens,
+    // so the cached list can never outlive the truth.
+    private const string DocumentsCacheTag = "documents";
+
     public static IEndpointRouteBuilder MapDocumentEndpoints(this IEndpointRouteBuilder api)
     {
         var group = api.MapGroup("/documents");
@@ -16,7 +23,7 @@ public static class DocumentEndpoints
             .WithName("ListDocuments")
             // Redis-backed output cache: for 5s the response is served from Redis
             // without touching the database.
-            .CacheOutput(p => p.Expire(TimeSpan.FromSeconds(5)));
+            .CacheOutput(p => p.Expire(TimeSpan.FromSeconds(5)).Tag(DocumentsCacheTag));
 
         group.MapGet("/{id:guid}", async Task<IResult> (Guid id, AppDbContext db) =>
                 await db.Documents.FindAsync(id) is { } doc
@@ -24,8 +31,10 @@ public static class DocumentEndpoints
                     : TypedResults.NotFound())
             .WithName("GetDocument");
 
-        // Multipart upload: the file goes to blob storage, its metadata to PostgreSQL.
-        group.MapPost("/", async (IFormFile file, BlobContainerClient blobContainer, AppDbContext db) =>
+        // Multipart upload: the file goes to blob storage, its metadata to PostgreSQL,
+        // then a message is queued so the worker can process it asynchronously.
+        group.MapPost("/", async (IFormFile file, BlobContainerClient blobContainer, AppDbContext db,
+                ServiceBusSender queue, IOutputCacheStore cache) =>
             {
                 if (file.Length == 0)
                 {
@@ -63,6 +72,19 @@ public static class DocumentEndpoints
                 db.Documents.Add(doc);
                 await db.SaveChangesAsync();
 
+                // Hand the heavy work to the worker via the queue. The API stays fast:
+                // it only records "something to do" and returns immediately.
+                var message = new ServiceBusMessage(JsonSerializer.Serialize(new ProcessDocumentMessage(doc.Id)))
+                {
+                    ContentType = "application/json",
+                    // Stable id enables duplicate detection if we ever turn it on.
+                    MessageId = doc.Id.ToString(),
+                };
+                await queue.SendMessageAsync(message);
+
+                // The world changed: drop the cached list so the next GET is fresh.
+                await cache.EvictByTagAsync(DocumentsCacheTag, CancellationToken.None);
+
                 return Results.Created($"/api/documents/{doc.Id}", doc);
             })
             .WithName("UploadDocument")
@@ -92,7 +114,8 @@ public static class DocumentEndpoints
             })
             .WithName("DownloadDocument");
 
-        group.MapDelete("/{id:guid}", async Task<IResult> (Guid id, BlobContainerClient blobContainer, AppDbContext db) =>
+        group.MapDelete("/{id:guid}", async Task<IResult> (Guid id, BlobContainerClient blobContainer,
+                AppDbContext db, IOutputCacheStore cache) =>
             {
                 var doc = await db.Documents.FindAsync(id);
                 if (doc is null)
@@ -107,6 +130,8 @@ public static class DocumentEndpoints
 
                 db.Documents.Remove(doc);
                 await db.SaveChangesAsync();
+
+                await cache.EvictByTagAsync(DocumentsCacheTag, CancellationToken.None);
 
                 return TypedResults.NoContent();
             })
