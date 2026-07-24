@@ -1,6 +1,6 @@
-using System.Text.Json;
 using AiDocMngmnt.Data;
 using Azure.Messaging.ServiceBus;
+using Azure.Storage.Blobs;
 
 namespace AiDocMngmnt.Worker;
 
@@ -9,6 +9,9 @@ public class DocumentProcessor(
     IServiceScopeFactory scopeFactory,
     ILogger<DocumentProcessor> logger) : BackgroundService
 {
+    // After this many failed attempts we stop retrying and dead-letter the message.
+    private const int MaxAttempts = 3;
+
     private ServiceBusProcessor? _processor;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -63,21 +66,63 @@ public class DocumentProcessor(
             return;
         }
 
-        document.Status = DocumentStatus.Processing;
-        await db.SaveChangesAsync(args.CancellationToken);
+        try
+        {
+            document.Status = DocumentStatus.Processing;
+            await db.SaveChangesAsync(args.CancellationToken);
 
-        // Placeholder for the real work — Phase 5 replaces this with
-        // text extraction, summarization and tagging.
-        await Task.Delay(TimeSpan.FromSeconds(5), args.CancellationToken);
+            var blobContainer = scope.ServiceProvider.GetRequiredService<BlobContainerClient>();
+            var analyzer = scope.ServiceProvider.GetRequiredService<DocumentAnalyzer>();
 
-        document.Status = DocumentStatus.Processed;
-        await db.SaveChangesAsync(args.CancellationToken);
+            // 1. Download the file from blob storage.
+            var blob = blobContainer.GetBlobClient(document.BlobPath);
+            await using var content = await blob.OpenReadAsync(cancellationToken: args.CancellationToken);
 
-        // Only now is the message removed from the queue. If we crashed before
-        // this line, the lock would expire and the message would be redelivered.
-        await args.CompleteMessageAsync(args.Message);
+            // 2. Extract plain text from it.
+            var text = await TextExtractor.ExtractAsync(content, document.ContentType, args.CancellationToken);
 
-        logger.LogInformation("Document {DocumentId} processed", message.DocumentId);
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                document.ExtractedText = text;
+
+                // 3. Ask the model for a summary and tags (one chat call).
+                var analysis = await analyzer.AnalyzeAsync(document.FileName, text, args.CancellationToken);
+                document.Summary = analysis.Summary;
+                document.Tags = [.. analysis.Tags];
+            }
+            else
+            {
+                logger.LogWarning("No text could be extracted from {FileName} ({ContentType})",
+                    document.FileName, document.ContentType);
+            }
+
+            document.Status = DocumentStatus.Processed;
+            await db.SaveChangesAsync(args.CancellationToken);
+
+            // Only now is the message removed from the queue. If we crashed before
+            // this line, the lock would expire and the message would be redelivered.
+            await args.CompleteMessageAsync(args.Message);
+
+            logger.LogInformation("Document {DocumentId} processed", message.DocumentId);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Processing failed for document {DocumentId} (attempt {Attempt})",
+                message.DocumentId, args.Message.DeliveryCount);
+
+            if (args.Message.DeliveryCount >= MaxAttempts)
+            {
+                // Give up: record the failure and park the message for inspection.
+                document.Status = DocumentStatus.Failed;
+                await db.SaveChangesAsync(CancellationToken.None);
+                await args.DeadLetterMessageAsync(args.Message, "ProcessingFailed", ex.Message);
+            }
+            else
+            {
+                // Release the lock immediately so the message is redelivered and retried.
+                await args.AbandonMessageAsync(args.Message);
+            }
+        }
     }
 
     private Task HandleErrorAsync(ProcessErrorEventArgs args)

@@ -1,3 +1,5 @@
+using Aspire.Hosting.GitHub;
+
 var builder = DistributedApplication.CreateBuilder(args);
 
 // PostgreSQL with the pgvector extension (needed later for semantic search).
@@ -31,6 +33,13 @@ var serviceBus = builder.AddAzureServiceBus("messaging")
 
 var documentsQueue = serviceBus.AddServiceBusQueue(name: "documents-to-process");
 
+// Free GitHub Models endpoint (OpenAI-compatible). The API key is a secret
+// parameter resolved from user secrets (Parameters:github-models-key).
+var githubModelsKey = builder.AddParameter("github-models-key", secret: true);
+
+var chatModel = builder.AddGitHubModel("chat", GitHubModel.OpenAI.OpenAIGpt4oMini)
+    .WithApiKey(githubModelsKey);
+
 var server = builder.AddProject<Projects.AiDocMngmnt_Server>("server")
     .WithReference(docdb)
     .WaitFor(docdb)
@@ -43,12 +52,16 @@ var server = builder.AddProject<Projects.AiDocMngmnt_Server>("server")
     .WithHttpHealthCheck("/health")
     .WithExternalHttpEndpoints();
 
-// The worker consumes the queue and updates document status in the database.
+// The worker consumes the queue, downloads the blob, runs the AI analysis
+// and updates the document in the database.
 builder.AddProject<Projects.AiDocMngmnt_Worker>("worker")
     .WithReference(docdb)
     .WaitFor(docdb)
     .WithReference(serviceBus)
-    .WaitFor(documentsQueue);
+    .WaitFor(documentsQueue)
+    .WithReference(documentBlobs)
+    .WaitFor(documentBlobs)
+    .WithReference(chatModel);
 
 var webfrontend = builder.AddViteApp("webfrontend", "../frontend")
     .WithReference(server)

@@ -12,7 +12,11 @@ public class Document
     // Actual location of the file in blob storage (filled in Phase 3).
     public string? BlobPath { get; set; }
 
-    // AI-generated fields (filled in Phase 5).
+    // Raw text extracted from the file (input for AI analysis and,
+    // later, for semantic search chunking).
+    public string? ExtractedText { get; set; }
+
+    // AI-generated fields.
     public string? Summary { get; set; }
     public List<string> Tags { get; set; } = [];
 }

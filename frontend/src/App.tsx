@@ -172,6 +172,28 @@ function App() {
                         <a href={`/api/documents/${doc.id}/content`} download={doc.fileName}>
                           {doc.fileName}
                         </a>
+                        {doc.summary && (
+                          <div style={{ fontSize: '0.85em', opacity: 0.75, marginTop: '0.25rem' }}>
+                            {doc.summary}
+                          </div>
+                        )}
+                        {doc.tags.length > 0 && (
+                          <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', marginTop: '0.3rem' }}>
+                            {doc.tags.map((tag) => (
+                              <span
+                                key={tag}
+                                style={{
+                                  fontSize: '0.75em',
+                                  padding: '0.1rem 0.5rem',
+                                  borderRadius: '1rem',
+                                  border: '1px solid rgba(128,128,128,0.4)',
+                                }}
+                              >
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </td>
                       <td style={{ padding: '0.5rem' }}>{formatBytes(doc.sizeBytes)}</td>
                       <td style={{ padding: '0.5rem' }}>{doc.status}</td>
