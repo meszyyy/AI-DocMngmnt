@@ -40,6 +40,10 @@ var githubModelsKey = builder.AddParameter("github-models-key", secret: true);
 var chatModel = builder.AddGitHubModel("chat", GitHubModel.OpenAI.OpenAIGpt4oMini)
     .WithApiKey(githubModelsKey);
 
+// Embedding model for semantic search (1536-dimension vectors).
+var embeddingModel = builder.AddGitHubModel("embedding", GitHubModel.OpenAI.OpenAITextEmbedding3Small)
+    .WithApiKey(githubModelsKey);
+
 var server = builder.AddProject<Projects.AiDocMngmnt_Server>("server")
     .WithReference(docdb)
     .WaitFor(docdb)
@@ -49,6 +53,7 @@ var server = builder.AddProject<Projects.AiDocMngmnt_Server>("server")
     .WaitFor(documentBlobs)
     .WithReference(serviceBus)
     .WaitFor(documentsQueue)
+    .WithReference(embeddingModel)
     .WithHttpHealthCheck("/health")
     .WithExternalHttpEndpoints();
 
@@ -61,7 +66,8 @@ builder.AddProject<Projects.AiDocMngmnt_Worker>("worker")
     .WaitFor(documentsQueue)
     .WithReference(documentBlobs)
     .WaitFor(documentBlobs)
-    .WithReference(chatModel);
+    .WithReference(chatModel)
+    .WithReference(embeddingModel);
 
 var webfrontend = builder.AddViteApp("webfrontend", "../frontend")
     .WithReference(server)

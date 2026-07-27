@@ -17,6 +17,8 @@ enriched with AI-generated summaries and tags.
   retry and dead-lettering
 - 🤖 **AI analysis** — text extraction (plain text, PDF), summary and tag generation
   via GitHub Models behind the `Microsoft.Extensions.AI` abstraction
+- 🔍 **Semantic search** — documents are chunked and embedded (pgvector + HNSW index);
+  search works by meaning, across languages
 - ⚡ **Redis output caching** — with tag-based invalidation on writes
 - 🔭 **Full observability** — logs, metrics and distributed traces in the Aspire dashboard
 
@@ -119,7 +121,7 @@ storage account, which takes a minute or two.
 - [x] File storage: Azure Blob Storage with automatic provisioning
 - [x] Async processing: Service Bus + worker service
 - [x] AI analysis: text extraction, summary, tags
-- [ ] Semantic search: embeddings + pgvector
+- [x] Semantic search: embeddings + pgvector
 - [ ] RAG chat over documents
 
 ## Notes

@@ -5,6 +5,9 @@ using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using Microsoft.AspNetCore.OutputCaching;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.AI;
+using Pgvector;
+using Pgvector.EntityFrameworkCore;
 
 namespace AiDocMngmnt.Server;
 
@@ -30,6 +33,49 @@ public static class DocumentEndpoints
                     ? TypedResults.Ok(doc)
                     : TypedResults.NotFound())
             .WithName("GetDocument");
+
+        // Hybrid-lite search: a chunk is returned when it contains the query
+        // literally (names, ids — where embeddings are weak) OR when it is a
+        // strong semantic match. Nearest-neighbor alone would always return
+        // top-N results no matter how irrelevant they are.
+        group.MapGet("/search", async (string q, IEmbeddingGenerator<string, Embedding<float>> embedder, AppDbContext db) =>
+            {
+                if (string.IsNullOrWhiteSpace(q))
+                {
+                    return Results.BadRequest("Query must not be empty.");
+                }
+
+                var embedding = await embedder.GenerateAsync(q);
+                var queryVector = new Vector(embedding.Vector);
+                var pattern = $"%{q.Trim()}%";
+
+                // Cosine distance 0 = identical direction; 1 - distance gives an
+                // intuitive "higher is better" similarity score. 0.7 distance
+                // (score 0.3) is an empirical relevance cut-off for this model.
+                const double MaxDistance = 0.7;
+
+                var results = await db.Chunks
+                    .Select(c => new
+                    {
+                        Chunk = c,
+                        Distance = c.Embedding!.CosineDistance(queryVector),
+                        LiteralMatch = EF.Functions.ILike(c.Text, pattern),
+                    })
+                    .Where(x => x.LiteralMatch || x.Distance <= MaxDistance)
+                    // Literal hits first, then by semantic closeness.
+                    .OrderByDescending(x => x.LiteralMatch)
+                    .ThenBy(x => x.Distance)
+                    .Take(5)
+                    .Select(x => new SearchResult(
+                        x.Chunk.DocumentId,
+                        x.Chunk.Document!.FileName,
+                        x.Chunk.Text.Length > 300 ? x.Chunk.Text.Substring(0, 300) + "…" : x.Chunk.Text,
+                        1 - x.Distance))
+                    .ToListAsync();
+
+                return Results.Ok(results);
+            })
+            .WithName("SearchDocuments");
 
         // Multipart upload: the file goes to blob storage, its metadata to PostgreSQL,
         // then a message is queued so the worker can process it asynchronously.
@@ -140,3 +186,5 @@ public static class DocumentEndpoints
         return api;
     }
 }
+
+public record SearchResult(Guid DocumentId, string FileName, string Snippet, double Score);

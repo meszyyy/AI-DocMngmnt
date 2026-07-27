@@ -1,6 +1,9 @@
 using AiDocMngmnt.Data;
 using Azure.Messaging.ServiceBus;
 using Azure.Storage.Blobs;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.AI;
+using Pgvector;
 
 namespace AiDocMngmnt.Worker;
 
@@ -89,6 +92,32 @@ public class DocumentProcessor(
                 var analysis = await analyzer.AnalyzeAsync(document.FileName, text, args.CancellationToken);
                 document.Summary = analysis.Summary;
                 document.Tags = [.. analysis.Tags];
+
+                // 4. Chunk the text and embed every chunk (one batched call),
+                //    replacing any chunks from a previous processing run.
+                var embeddingGenerator = scope.ServiceProvider
+                    .GetRequiredService<IEmbeddingGenerator<string, Embedding<float>>>();
+
+                var chunkTexts = TextChunker.Chunk(text);
+                var embeddings = await embeddingGenerator.GenerateAsync(chunkTexts, cancellationToken: args.CancellationToken);
+
+                await db.Chunks.Where(c => c.DocumentId == document.Id)
+                    .ExecuteDeleteAsync(args.CancellationToken);
+
+                for (var i = 0; i < chunkTexts.Count; i++)
+                {
+                    db.Chunks.Add(new DocumentChunk
+                    {
+                        Id = Guid.CreateVersion7(),
+                        DocumentId = document.Id,
+                        Index = i,
+                        Text = chunkTexts[i],
+                        Embedding = new Vector(embeddings[i].Vector),
+                    });
+                }
+
+                logger.LogInformation("Embedded {ChunkCount} chunks for document {DocumentId}",
+                    chunkTexts.Count, document.Id);
             }
             else
             {

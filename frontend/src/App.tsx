@@ -12,11 +12,23 @@ interface DocumentDto {
   tags: string[];
 }
 
+interface SearchResultDto {
+  documentId: string;
+  fileName: string;
+  snippet: string;
+  score: number;
+}
+
 function App() {
   const [documents, setDocuments] = useState<DocumentDto[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState<SearchResultDto[] | null>(null);
+  // The query the current results belong to (the input may change afterwards).
+  const [resultsQuery, setResultsQuery] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchDocuments = useCallback(async () => {
@@ -83,6 +95,55 @@ function App() {
     }
   };
 
+  const search = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!query.trim()) return;
+    setSearching(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/documents/search?q=${encodeURIComponent(query.trim())}`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      setSearchResults(await response.json());
+      setResultsQuery(query.trim());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Search failed');
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const clearSearch = () => {
+    setSearchResults(null);
+    setQuery('');
+    setResultsQuery('');
+  };
+
+  // Wraps case-insensitive occurrences of the query words in <mark>.
+  // Semantic matches may not contain the words literally — then nothing
+  // is highlighted, which is honest.
+  const highlight = (text: string, forQuery: string) => {
+    const words = forQuery
+      .split(/\s+/)
+      .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ''))
+      .filter((w) => w.length >= 3)
+      .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    if (words.length === 0) return text;
+
+    // With a capturing group, split() keeps the matches at odd indices.
+    const parts = text.split(new RegExp(`(${words.join('|')})`, 'giu'));
+    return parts.map((part, i) =>
+      i % 2 === 1 ? (
+        <mark key={i} style={{ backgroundColor: '#ffd54f', color: '#000', borderRadius: '2px' }}>
+          {part}
+        </mark>
+      ) : (
+        part
+      ),
+    );
+  };
+
   const deleteDocument = async (id: string) => {
     try {
       const response = await fetch(`/api/documents/${id}`, { method: 'DELETE' });
@@ -146,9 +207,60 @@ function App() {
               style={{ display: 'none' }}
             />
 
+            <form onSubmit={search} style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Semantic search (e.g. 'project budget')"
+                style={{ flex: 1, padding: '0.5rem' }}
+              />
+              <button className="refresh-button" type="submit" disabled={searching || !query.trim()}>
+                {searching ? 'Searching...' : 'Search'}
+              </button>
+              {searchResults !== null && (
+                <button className="refresh-button" type="button" onClick={clearSearch}>
+                  Clear
+                </button>
+              )}
+            </form>
+
             {error && (
               <div className="error-message" role="alert">
                 <span>{error}</span>
+              </div>
+            )}
+
+            {searchResults !== null && (
+              <div style={{ marginBottom: '1.5rem' }}>
+                <h3 style={{ marginBottom: '0.5rem' }}>Search results</h3>
+                {searchResults.length === 0 ? (
+                  <p>No matches found.</p>
+                ) : (
+                  searchResults.map((r, i) => (
+                    <div
+                      key={`${r.documentId}-${i}`}
+                      style={{
+                        border: '1px solid rgba(128,128,128,0.3)',
+                        borderRadius: '0.5rem',
+                        padding: '0.75rem',
+                        marginBottom: '0.5rem',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <a href={`/api/documents/${r.documentId}/content`} download={r.fileName}>
+                          <strong>{r.fileName}</strong>
+                        </a>
+                        <span style={{ opacity: 0.6, fontSize: '0.85em' }}>
+                          score: {r.score.toFixed(3)}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '0.9em', opacity: 0.85, marginTop: '0.4rem' }}>
+                        {highlight(r.snippet, resultsQuery)}
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             )}
 

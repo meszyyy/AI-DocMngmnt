@@ -4,6 +4,7 @@ using AiDocMngmnt.Server;
 using Azure.Identity;
 using Azure.Messaging.ServiceBus;
 using Microsoft.EntityFrameworkCore;
+using Pgvector.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -22,8 +23,14 @@ builder.Services.AddOpenApi();
 
 // Aspire client integrations: the names ("docdb", "cache") match the AppHost
 // resource names — connection strings are injected by the AppHost.
-builder.AddNpgsqlDbContext<AppDbContext>("docdb");
+// UseVector teaches the Npgsql driver and EF about the pgvector column type.
+builder.AddNpgsqlDbContext<AppDbContext>("docdb", configureDbContextOptions: options =>
+    options.UseNpgsql(npgsql => npgsql.UseVector()));
 builder.AddRedisOutputCache("cache");
+
+// Embedding generator for turning search queries into vectors.
+builder.AddAzureEmbeddingsClient("embedding")
+    .AddEmbeddingGenerator();
 builder.AddAzureBlobContainerClient("documents", settings =>
 {
     if (builder.Environment.IsDevelopment())

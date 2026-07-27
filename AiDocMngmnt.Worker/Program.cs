@@ -1,6 +1,8 @@
 using AiDocMngmnt.Data;
 using AiDocMngmnt.Worker;
 using Azure.Identity;
+using Microsoft.EntityFrameworkCore;
+using Pgvector.EntityFrameworkCore;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -8,7 +10,9 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.AddServiceDefaults();
 
 // Aspire client integrations — the names match the AppHost resource names.
-builder.AddNpgsqlDbContext<AppDbContext>("docdb");
+// UseVector teaches the Npgsql driver and EF about the pgvector column type.
+builder.AddNpgsqlDbContext<AppDbContext>("docdb", configureDbContextOptions: options =>
+    options.UseNpgsql(npgsql => npgsql.UseVector()));
 builder.AddAzureServiceBusClient("messaging");
 builder.AddAzureBlobContainerClient("documents", settings =>
 {
@@ -19,9 +23,11 @@ builder.AddAzureBlobContainerClient("documents", settings =>
     }
 });
 
-// GitHub Models (OpenAI-compatible) chat client behind the IChatClient abstraction.
+// GitHub Models (OpenAI-compatible) behind the Microsoft.Extensions.AI abstractions.
 builder.AddAzureChatCompletionsClient("chat")
     .AddChatClient();
+builder.AddAzureEmbeddingsClient("embedding")
+    .AddEmbeddingGenerator();
 
 builder.Services.AddSingleton<DocumentAnalyzer>();
 builder.Services.AddHostedService<DocumentProcessor>();
