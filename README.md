@@ -16,9 +16,11 @@ enriched with AI-generated summaries and tags.
 - ⚙️ **Asynchronous processing** — Service Bus queue + worker service with PeekLock,
   retry and dead-lettering
 - 🤖 **AI analysis** — text extraction (plain text, PDF), summary and tag generation
-  via GitHub Models behind the `Microsoft.Extensions.AI` abstraction
+  via Azure OpenAI behind the `Microsoft.Extensions.AI` abstraction
 - 🔍 **Semantic search** — documents are chunked and embedded (pgvector + HNSW index);
   search works by meaning, across languages
+- 💬 **RAG chat** — ask questions about your documents; answers are grounded in the
+  most relevant chunks, streamed to the browser and cited with sources
 - ⚡ **Redis output caching** — with tag-based invalidation on writes
 - 🔭 **Full observability** — logs, metrics and distributed traces in the Aspire dashboard
 
@@ -34,7 +36,7 @@ flowchart TD
     Redis[(Redis cache)]
     Blob[(Azure Blob Storage)]
     SB[Service Bus queue]
-    AI[GitHub Models via Microsoft.Extensions.AI]
+    AI[Azure OpenAI via Microsoft.Extensions.AI]
 
     AppHost -.orchestrates.- Web & API & Worker & PG & Redis & SB
     Web --> API
@@ -69,8 +71,9 @@ environment variables, and hosts the dashboard.
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (PostgreSQL, Redis and the Service Bus emulator run in containers)
 - [Node.js](https://nodejs.org/) 22+
-- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) with an Azure subscription (free tier is enough) — blob storage is provisioned automatically
-- A GitHub fine-grained personal access token with the **Models: Read-only** account permission (free tier)
+- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) with an Azure subscription — blob storage and the Azure OpenAI
+  account (gpt-5.4-mini + text-embedding-3-small deployments) are provisioned automatically;
+  AI usage is billed per token (cents at learning-project scale)
 
 ### Setup
 
@@ -84,9 +87,6 @@ dotnet user-secrets set "Azure:Location" "germanywestcentral" --project AiDocMng
 dotnet user-secrets set "Azure:ResourceGroup" "rg-aidocmngmnt-dev" --project AiDocMngmnt.AppHost
 dotnet user-secrets set "Azure:AllowResourceGroupCreation" "true" --project AiDocMngmnt.AppHost
 dotnet user-secrets set "Azure:CredentialSource" "AzureCli" --project AiDocMngmnt.AppHost
-
-# 3. Configure the GitHub Models API key
-dotnet user-secrets set "Parameters:github-models-key" "<your-github-pat>" --project AiDocMngmnt.AppHost
 ```
 
 ### Run
@@ -122,7 +122,7 @@ storage account, which takes a minute or two.
 - [x] Async processing: Service Bus + worker service
 - [x] AI analysis: text extraction, summary, tags
 - [x] Semantic search: embeddings + pgvector
-- [ ] RAG chat over documents
+- [x] RAG chat over documents
 
 ## Notes
 

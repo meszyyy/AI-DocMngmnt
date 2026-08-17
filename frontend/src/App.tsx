@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import ChatPanel from './ChatPanel';
 import './App.css';
 
 interface DocumentDto {
@@ -321,6 +322,8 @@ function App() {
               </table>
             )}
           </div>
+
+          <ChatPanel />
         </section>
       </main>
     </div>

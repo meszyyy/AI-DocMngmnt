@@ -17,6 +17,15 @@ public static class DocumentEndpoints
     // so the cached list can never outlive the truth.
     private const string DocumentsCacheTag = "documents";
 
+    private static readonly JsonSerializerOptions NdjsonOptions = new(JsonSerializerDefaults.Web);
+
+    // One NDJSON line, flushed immediately so the browser sees it right away.
+    private static async Task WriteLineAsync(HttpResponse response, object payload, CancellationToken ct)
+    {
+        await response.WriteAsync(JsonSerializer.Serialize(payload, NdjsonOptions) + "\n", ct);
+        await response.Body.FlushAsync(ct);
+    }
+
     public static IEndpointRouteBuilder MapDocumentEndpoints(this IEndpointRouteBuilder api)
     {
         var group = api.MapGroup("/documents");
@@ -160,6 +169,89 @@ public static class DocumentEndpoints
             })
             .WithName("DownloadDocument");
 
+        // RAG chat: retrieve the most relevant chunks, hand them to the model as
+        // context, and stream the grounded answer back as NDJSON lines
+        // ({"type":"sources",...} first, then {"type":"delta","text":...} pieces).
+        group.MapPost("/chat", async (ChatRequest request,
+                IEmbeddingGenerator<string, Embedding<float>> embedder,
+                IChatClient chatClient,
+                AppDbContext db,
+                HttpContext http) =>
+            {
+                var ct = http.RequestAborted;
+
+                if (string.IsNullOrWhiteSpace(request.Question))
+                {
+                    http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                    return;
+                }
+
+                // 1. Retrieval: embed the question and fetch the nearest chunks.
+                //    The distance cut-off keeps unrelated text out of the context.
+                var embedding = await embedder.GenerateAsync(request.Question, cancellationToken: ct);
+                var queryVector = new Vector(embedding.Vector);
+
+                const double MaxDistance = 0.75;
+
+                var hits = await db.Chunks
+                    .Select(c => new
+                    {
+                        c.DocumentId,
+                        c.Document!.FileName,
+                        c.Text,
+                        Distance = c.Embedding!.CosineDistance(queryVector),
+                    })
+                    .Where(x => x.Distance <= MaxDistance)
+                    .OrderBy(x => x.Distance)
+                    .Take(6)
+                    .ToListAsync(ct);
+
+                http.Response.ContentType = "application/x-ndjson; charset=utf-8";
+
+                // 2. Tell the client up front which sources the answer will use.
+                var sources = hits
+                    .Select((h, i) => new ChatSource(i + 1, h.DocumentId, h.FileName, 1 - h.Distance))
+                    .ToList();
+                await WriteLineAsync(http.Response, new { type = "sources", sources }, ct);
+
+                if (hits.Count == 0)
+                {
+                    await WriteLineAsync(http.Response, new
+                    {
+                        type = "delta",
+                        text = "Nem találtam kapcsolódó tartalmat a dokumentumokban. / " +
+                               "I could not find anything related in your documents.",
+                    }, ct);
+                    return;
+                }
+
+                // 3. Augmentation: the retrieved excerpts become the model's context.
+                var context = string.Join("\n\n", hits.Select((h, i) => $"[{i + 1}] {h.FileName}:\n{h.Text}"));
+
+                List<ChatMessage> messages =
+                [
+                    new(ChatRole.System,
+                        """
+                        You answer questions about the user's documents.
+                        Use ONLY the numbered context excerpts below. If the answer is not
+                        in the context, say so honestly instead of guessing.
+                        Answer in the language of the question.
+                        Cite the excerpts you used inline as [1], [2], ...
+                        """ + "\n\nContext:\n" + context),
+                    new(ChatRole.User, request.Question),
+                ];
+
+                // 4. Generation: stream the answer token-by-token to the browser.
+                await foreach (var update in chatClient.GetStreamingResponseAsync(messages, cancellationToken: ct))
+                {
+                    if (!string.IsNullOrEmpty(update.Text))
+                    {
+                        await WriteLineAsync(http.Response, new { type = "delta", text = update.Text }, ct);
+                    }
+                }
+            })
+            .WithName("ChatWithDocuments");
+
         group.MapDelete("/{id:guid}", async Task<IResult> (Guid id, BlobContainerClient blobContainer,
                 AppDbContext db, IOutputCacheStore cache) =>
             {
@@ -188,3 +280,7 @@ public static class DocumentEndpoints
 }
 
 public record SearchResult(Guid DocumentId, string FileName, string Snippet, double Score);
+
+public record ChatRequest(string Question);
+
+public record ChatSource(int Index, Guid DocumentId, string FileName, double Score);
