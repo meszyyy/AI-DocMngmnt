@@ -1,5 +1,3 @@
-using Aspire.Hosting.GitHub;
-
 var builder = DistributedApplication.CreateBuilder(args);
 
 // PostgreSQL with the pgvector extension (needed later for semantic search).
@@ -33,16 +31,23 @@ var serviceBus = builder.AddAzureServiceBus("messaging")
 
 var documentsQueue = serviceBus.AddServiceBusQueue(name: "documents-to-process");
 
-// Free GitHub Models endpoint (OpenAI-compatible). The API key is a secret
-// parameter resolved from user secrets (Parameters:github-models-key).
-var githubModelsKey = builder.AddParameter("github-models-key", secret: true);
+// Azure OpenAI account with two model deployments — provisioned into the
+// subscription automatically, just like the storage account.
+// (Replaces GitHub Models, which was retired on 2026-07-30.)
+// GlobalStandard SKU routes globally, so model availability does not depend
+// on the resource group's region.
+var openai = builder.AddAzureOpenAI("openai");
 
-var chatModel = builder.AddGitHubModel("chat", GitHubModel.OpenAI.OpenAIGpt4oMini)
-    .WithApiKey(githubModelsKey);
+// gpt-4o-mini is already deprecating (no new deployments); gpt-5.4-mini is
+// the current small model with the longest support runway. DataZoneStandard:
+// the subscription has quota for it here (GlobalStandard had none), and it
+// keeps processing within the EU data zone.
+openai.AddDeployment("chat", "gpt-5.4-mini", "2026-03-17")
+    .WithProperties(d => d.SkuName = "DataZoneStandard");
 
 // Embedding model for semantic search (1536-dimension vectors).
-var embeddingModel = builder.AddGitHubModel("embedding", GitHubModel.OpenAI.OpenAITextEmbedding3Small)
-    .WithApiKey(githubModelsKey);
+openai.AddDeployment("embedding", "text-embedding-3-small", "1")
+    .WithProperties(d => d.SkuName = "GlobalStandard");
 
 var server = builder.AddProject<Projects.AiDocMngmnt_Server>("server")
     .WithReference(docdb)
@@ -53,7 +58,7 @@ var server = builder.AddProject<Projects.AiDocMngmnt_Server>("server")
     .WaitFor(documentBlobs)
     .WithReference(serviceBus)
     .WaitFor(documentsQueue)
-    .WithReference(embeddingModel)
+    .WithReference(openai)
     .WithHttpHealthCheck("/health")
     .WithExternalHttpEndpoints();
 
@@ -66,8 +71,7 @@ builder.AddProject<Projects.AiDocMngmnt_Worker>("worker")
     .WaitFor(documentsQueue)
     .WithReference(documentBlobs)
     .WaitFor(documentBlobs)
-    .WithReference(chatModel)
-    .WithReference(embeddingModel);
+    .WithReference(openai);
 
 var webfrontend = builder.AddViteApp("webfrontend", "../frontend")
     .WithReference(server)

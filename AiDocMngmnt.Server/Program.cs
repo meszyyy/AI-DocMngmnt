@@ -28,9 +28,18 @@ builder.AddNpgsqlDbContext<AppDbContext>("docdb", configureDbContextOptions: opt
     options.UseNpgsql(npgsql => npgsql.UseVector()));
 builder.AddRedisOutputCache("cache");
 
-// Embedding generator for turning search queries into vectors.
-builder.AddAzureEmbeddingsClient("embedding")
-    .AddEmbeddingGenerator();
+// Azure OpenAI client with the two deployments behind the
+// Microsoft.Extensions.AI abstractions (search embedding + RAG chat).
+var azureOpenAI = builder.AddAzureOpenAIClient("openai", settings =>
+{
+    if (builder.Environment.IsDevelopment())
+    {
+        // Pin auth to the Azure CLI login, same as for blob storage.
+        settings.Credential = new AzureCliCredential();
+    }
+});
+azureOpenAI.AddChatClient("chat");
+azureOpenAI.AddEmbeddingGenerator("embedding");
 builder.AddAzureBlobContainerClient("documents", settings =>
 {
     if (builder.Environment.IsDevelopment())

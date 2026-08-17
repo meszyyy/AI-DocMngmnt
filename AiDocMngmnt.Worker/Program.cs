@@ -23,11 +23,18 @@ builder.AddAzureBlobContainerClient("documents", settings =>
     }
 });
 
-// GitHub Models (OpenAI-compatible) behind the Microsoft.Extensions.AI abstractions.
-builder.AddAzureChatCompletionsClient("chat")
-    .AddChatClient();
-builder.AddAzureEmbeddingsClient("embedding")
-    .AddEmbeddingGenerator();
+// Azure OpenAI client with the two deployments behind the
+// Microsoft.Extensions.AI abstractions (analysis chat + chunk embeddings).
+var azureOpenAI = builder.AddAzureOpenAIClient("openai", settings =>
+{
+    if (builder.Environment.IsDevelopment())
+    {
+        // Pin auth to the Azure CLI login, same as for blob storage.
+        settings.Credential = new AzureCliCredential();
+    }
+});
+azureOpenAI.AddChatClient("chat");
+azureOpenAI.AddEmbeddingGenerator("embedding");
 
 builder.Services.AddSingleton<DocumentAnalyzer>();
 builder.Services.AddHostedService<DocumentProcessor>();
